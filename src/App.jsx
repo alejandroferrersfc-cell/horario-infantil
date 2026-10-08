@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { supabase } from './supabase';
 
 // Iconos sencillos usando SVG
 const PlusIcon = () => (
@@ -30,28 +31,11 @@ const INITIAL_SUBJECTS = [
   { id: 6, name: 'Atención Educativa', classroom: 'A1M', color: 'bg-indigo-400 text-white shadow-sm' }
 ];
 
-const INITIAL_SCHEDULE = [
-  { id: 'l1', day: 'Lunes', startTime: '17:30', endTime: '19:00', subjectId: 44 },
-  { id: 'l2', day: 'Lunes', startTime: '19:00', endTime: '20:30', subjectId: 55 },
-  { id: 'm1', day: 'Martes', startTime: '08:30', endTime: '10:00', subjectId: 1 },
-  { id: 'm2', day: 'Martes', startTime: '10:00', endTime: '12:00', subjectId: 22 },
-  { id: 'm3', day: 'Martes', startTime: '11:30', endTime: '13:00', subjectId: 11 },
-  { id: 'm4', day: 'Martes', startTime: '13:00', endTime: '14:30', subjectId: 33 },
-  { id: 'm5', day: 'Martes', startTime: '16:00', endTime: '17:30', subjectId: 4 },
-  { id: 'm6', day: 'Martes', startTime: '19:00', endTime: '20:30', subjectId: 6 },
-  { id: 'x1', day: 'Miércoles', startTime: '11:30', endTime: '13:00', subjectId: 2 },
-  { id: 'x2', day: 'Miércoles', startTime: '13:00', endTime: '14:30', subjectId: 3 },
-  { id: 'x3', day: 'Miércoles', startTime: '14:30', endTime: '16:00', subjectId: 6 },
-  { id: 'j1', day: 'Jueves', startTime: '10:00', endTime: '11:30', subjectId: 2 },
-  { id: 'j2', day: 'Jueves', startTime: '10:00', endTime: '11:30', subjectId: 3 },
-  { id: 'j3', day: 'Jueves', startTime: '14:30', endTime: '16:00', subjectId: 4 },
-  { id: 'j4', day: 'Jueves', startTime: '15:00', endTime: '16:30', subjectId: 4 },
-  { id: 'v1', day: 'Viernes', startTime: '08:30', endTime: '10:00', subjectId: 1 }
-];
-
 export default function App() {
   const [subjects] = useState(INITIAL_SUBJECTS);
-  const [schedule, setSchedule] = useState(INITIAL_SCHEDULE);
+  const [schedule, setSchedule] = useState([]);
+  const [loading, setLoading] = useState(true);
+
   const [tasks, setTasks] = useState([
     { id: 1, title: 'Práctica de Robótica', subject: 'Robótica (Prácticas)', date: 'Esta semana', done: false },
     { id: 2, title: 'Trabajo grupal Diversidad Cultural', subject: 'Diversidad Cultural (Prácticas)', date: 'Próxima semana', done: false }
@@ -64,6 +48,33 @@ export default function App() {
   const [selectedSubjectId, setSelectedSubjectId] = useState(INITIAL_SUBJECTS[0].id);
 
   const [activeTab, setActiveTab] = useState('todos');
+
+  // Cargar datos de Supabase al iniciar
+  useEffect(() => {
+    fetchSchedule();
+  }, []);
+
+  const fetchSchedule = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase.from('schedule_items').select('*');
+      if (error) throw error;
+      
+      // Mapear los campos de la base de datos al formato del estado
+      const formattedData = data.map(item => ({
+        id: item.id,
+        day: item.day,
+        startTime: item.start_time,
+        endTime: item.end_time,
+        subjectId: item.subject_id
+      }));
+      setSchedule(formattedData);
+    } catch (error) {
+      console.error('Error cargando el horario:', error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const filteredSchedule = schedule.filter(item => {
     const hour = parseInt(item.startTime.split(':')[0]);
@@ -86,46 +97,93 @@ export default function App() {
     setModalOpen(true);
   };
 
-  const handleAddOrUpdateSlot = (e) => {
+  const handleAddOrUpdateSlot = async (e) => {
     e.preventDefault();
-    if (editingId) {
-      setSchedule(schedule.map(item => item.id === editingId ? {
-        ...item,
-        day: selectedSlot.day,
-        startTime: selectedSlot.startTime,
-        endTime: selectedSlot.endTime,
-        subjectId: parseInt(selectedSubjectId)
-      } : item));
-    } else {
-      const newEntry = {
-        id: Date.now().toString(),
-        day: selectedSlot.day,
-        startTime: selectedSlot.startTime,
-        endTime: selectedSlot.endTime,
-        subjectId: parseInt(selectedSubjectId)
-      };
-      setSchedule([...schedule, newEntry]);
+    try {
+      if (editingId) {
+        // Actualizar en Supabase
+        const { error } = await supabase
+          .from('schedule_items')
+          .update({
+            day: selectedSlot.day,
+            start_time: selectedSlot.startTime,
+            end_time: selectedSlot.endTime,
+            subject_id: parseInt(selectedSubjectId)
+          })
+          .eq('id', editingId);
+
+        if (error) throw error;
+
+        setSchedule(schedule.map(item => item.id === editingId ? {
+          ...item,
+          day: selectedSlot.day,
+          startTime: selectedSlot.startTime,
+          endTime: selectedSlot.endTime,
+          subjectId: parseInt(selectedSubjectId)
+        } : item));
+      } else {
+        // Insertar nuevo en Supabase
+        const newItem = {
+          day: selectedSlot.day,
+          start_time: selectedSlot.startTime,
+          end_time: selectedSlot.endTime,
+          subject_id: parseInt(selectedSubjectId)
+        };
+
+        const { data, error } = await supabase
+          .from('schedule_items')
+          .insert([newItem])
+          .select();
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          const inserted = data[0];
+          setSchedule([...schedule, {
+            id: inserted.id,
+            day: inserted.day,
+            startTime: inserted.start_time,
+            endTime: inserted.end_time,
+            subjectId: inserted.subject_id
+          }]);
+        }
+      }
+      setModalOpen(false);
+    } catch (error) {
+      console.error('Error al guardar en Supabase:', error.message);
+      alert('Hubo un error al guardar el cambio.');
     }
-    setModalOpen(false);
   };
 
-  const removeScheduleItem = (id) => {
-    setSchedule(schedule.filter(item => item.id !== id));
+  const removeScheduleItem = async (id) => {
+    try {
+      const { error } = await supabase
+        .from('schedule_items')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setSchedule(schedule.filter(item => item.id !== id));
+    } catch (error) {
+      console.error('Error al eliminar:', error.message);
+      alert('Hubo un error al eliminar el bloque.');
+    }
   };
 
   return (
     <div className="min-h-screen text-slate-800 font-sans p-3 sm:p-4 md:p-6 w-full" style={{ backgroundColor: '#dccff4' }}>
-      {/* Cabecera Adaptativa */}
+      {/* Cabecera */}
       <header className="max-w-7xl mx-auto bg-white/90 backdrop-blur-md rounded-2xl p-4 sm:p-6 shadow-sm border border-purple-200/60 mb-6 flex flex-col lg:flex-row justify-between items-center gap-4">
         <div className="text-center lg:text-left">
           <div className="flex items-center justify-center lg:justify-start gap-2 text-purple-600 font-semibold text-xs sm:text-sm uppercase tracking-wider mb-1">
             <span>✨ Bienvenida, Camelia • Grado en Educación Infantil</span>
           </div>
-          <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-slate-900">Tu Horario Universitario</h1>
-          <p className="text-slate-500 text-xs sm:text-sm mt-0.5">Teoría, prácticas y recursos organizados en el móvil.</p>
+          <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-slate-900">Tu Horario Universitario (Cloud)</h1>
+          <p className="text-slate-500 text-xs sm:text-sm mt-0.5">Sincronizado en tiempo real con Supabase.</p>
         </div>
 
-        {/* Filtros de turno táctiles */}
+        {/* Filtros de turno */}
         <div className="flex bg-purple-100/70 p-1 rounded-xl gap-1 w-full sm:w-auto justify-center">
           <button 
             onClick={() => setActiveTab('todos')} 
@@ -164,65 +222,67 @@ export default function App() {
               </button>
             </div>
 
-            {/* Días adaptados a móvil (1 columna en móvil, 5 columnas en pantallas grandes) */}
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-              {DAYS.map(day => {
-                const dayClasses = filteredSchedule.filter(item => item.day === day).sort((a,b) => a.startTime.localeCompare(b.startTime));
-                return (
-                  <div key={day} className="bg-purple-50/50 rounded-xl p-3 border border-purple-100 flex flex-col gap-3">
-                    <div className="text-center font-bold text-purple-900 pb-2 border-b border-purple-200 text-sm">
-                      {day}
-                    </div>
+            {loading ? (
+              <div className="py-20 text-center text-purple-700 font-medium">Cargando horario desde la nube...</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                {DAYS.map(day => {
+                  const dayClasses = filteredSchedule.filter(item => item.day === day).sort((a,b) => a.startTime.localeCompare(b.startTime));
+                  return (
+                    <div key={day} className="bg-purple-50/50 rounded-xl p-3 border border-purple-100 flex flex-col gap-3">
+                      <div className="text-center font-bold text-purple-900 pb-2 border-b border-purple-200 text-sm">
+                        {day}
+                      </div>
 
-                    <div className="flex flex-col gap-2.5">
-                      {dayClasses.map(item => {
-                        const subj = subjects.find(s => s.id === item.subjectId) || subjects[0];
-                        return (
-                          <div key={item.id} className={`${subj.color} p-3 rounded-xl shadow-sm relative group flex flex-col justify-between transition-transform`}>
-                            <div>
-                              <div className="text-[11px] opacity-90 font-semibold mb-0.5">{item.startTime} - {item.endTime}</div>
-                              <div className="font-bold text-xs sm:text-sm leading-snug break-words">{subj.name}</div>
-                              <div className="text-[11px] opacity-90 mt-1">Aula: {subj.classroom}</div>
+                      <div className="flex flex-col gap-2.5">
+                        {dayClasses.map(item => {
+                          const subj = subjects.find(s => s.id === item.subjectId) || subjects[0];
+                          return (
+                            <div key={item.id} className={`${subj.color} p-3 rounded-xl shadow-sm relative group flex flex-col justify-between transition-transform`}>
+                              <div>
+                                <div className="text-[11px] opacity-90 font-semibold mb-0.5">{item.startTime} - {item.endTime}</div>
+                                <div className="font-bold text-xs sm:text-sm leading-snug break-words">{subj.name}</div>
+                                <div className="text-[11px] opacity-90 mt-1">Aula: {subj.classroom}</div>
+                              </div>
+                              
+                              <div className="absolute top-2 right-2 flex gap-1 opacity-90 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button 
+                                  onClick={() => handleOpenEditModal(item)}
+                                  className="bg-black/20 hover:bg-black/40 p-1.5 rounded-lg text-white"
+                                  title="Editar bloque"
+                                >
+                                  <EditIcon />
+                                </button>
+                                <button 
+                                  onClick={() => removeScheduleItem(item.id)}
+                                  className="bg-black/20 hover:bg-black/40 p-1.5 rounded-lg text-white"
+                                  title="Eliminar bloque"
+                                >
+                                  <TrashIcon />
+                                </button>
+                              </div>
                             </div>
-                            
-                            {/* Botones de Editar y Eliminar (visibles fácilmente en táctil y hover) */}
-                            <div className="absolute top-2 right-2 flex gap-1 opacity-90 sm:opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button 
-                                onClick={() => handleOpenEditModal(item)}
-                                className="bg-black/20 hover:bg-black/40 p-1.5 rounded-lg text-white"
-                                title="Editar bloque"
-                              >
-                                <EditIcon />
-                              </button>
-                              <button 
-                                onClick={() => removeScheduleItem(item.id)}
-                                className="bg-black/20 hover:bg-black/40 p-1.5 rounded-lg text-white"
-                                title="Eliminar bloque"
-                              >
-                                <TrashIcon />
-                              </button>
-                            </div>
+                          );
+                        })}
+
+                        {dayClasses.length === 0 && (
+                          <div className="py-6 flex items-center justify-center text-xs text-purple-400 italic text-center">
+                            Sin clases en este turno
                           </div>
-                        );
-                      })}
+                        )}
+                      </div>
 
-                      {dayClasses.length === 0 && (
-                        <div className="py-6 flex items-center justify-center text-xs text-purple-400 italic text-center">
-                          Sin clases en este turno
-                        </div>
-                      )}
+                      <button 
+                        onClick={() => handleOpenAddModal(day)}
+                        className="w-full py-2 border border-dashed border-purple-300 hover:border-purple-500 text-purple-600 hover:text-purple-700 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1 bg-white/70"
+                      >
+                        <PlusIcon /> Añadir hora
+                      </button>
                     </div>
-
-                    <button 
-                      onClick={() => handleOpenAddModal(day)}
-                      className="w-full py-2 border border-dashed border-purple-300 hover:border-purple-500 text-purple-600 hover:text-purple-700 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1 bg-white/70"
-                    >
-                      <PlusIcon /> Añadir hora
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
@@ -272,7 +332,7 @@ export default function App() {
         </div>
       </main>
 
-      {/* Modal adaptado a móvil */}
+      {/* Modal */}
       {modalOpen && (
         <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-purple-200">
